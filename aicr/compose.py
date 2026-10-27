@@ -69,7 +69,8 @@ def _summary_body(result: ReviewResult, skipped: list, repo_label: str) -> str:
         head += f" · {repo_label}"
     lines = [head,
              f"文件 {s.files_reviewed} ｜ 发现 {s.findings}"
-             f" ｜ 预估成本 ¥{s.est_cost_cny:.2f}"]
+             f" ｜ 预估成本 ¥{s.est_cost_cny:.2f}",
+             f"平均发现密度 {s.findings / s.files_reviewed:.2f} 条/文件"]
     if s.by_criterion:
         lines.append("按判据：" + "  ".join(f"{k}×{v}" for k, v in sorted(s.by_criterion.items())))
     if s.agent:
