@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aicr"
+version = "0.1.0"
+description = "AI Code Review engine — PR-level review with criteria whitelist, deterministic+LLM two-tier detection, and injectable regression evals"
+requires-python = ">=3.10"
+
+[project.scripts]
+aicr = "aicr.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["aicr*"]

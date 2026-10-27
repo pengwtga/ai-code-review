@@ -1,0 +1,140 @@
+{
+  "version": "v0.1",
+  "cases": [
+    {
+      "id": "C5-P1",
+      "path": "services/tags.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "C5": ">=1"
+      }
+    },
+    {
+      "id": "C5-N1",
+      "path": "services/tags.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "*": "0"
+      }
+    },
+    {
+      "id": "E6-P1",
+      "path": "services/feed.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "E6": ">=1"
+      }
+    },
+    {
+      "id": "E6-N1",
+      "path": "services/feed.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "*": "0"
+      }
+    },
+    {
+      "id": "C4-P1",
+      "path": "services/worker.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "C4": ">=1"
+      }
+    },
+    {
+      "id": "C4-N1",
+      "path": "services/worker.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "*": "0"
+      }
+    },
+    {
+      "id": "C3-P1",
+      "path": "services/config_loader.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "C3": ">=1"
+      }
+    },
+    {
+      "id": "C3-N1",
+      "path": "services/config_loader.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "*": "0"
+      }
+    },
+    {
+      "id": "E4-P1",
+      "path": "services/settings.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "E4": ">=1"
+      }
+    },
+    {
+      "id": "E4-N1",
+      "path": "services/settings.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "*": "0"
+      }
+    },
+    {
+      "id": "C1-P1",
+      "path": "services/users.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "C1": ">=1"
+      }
+    },
+    {
+      "id": "C1-N1",
+      "path": "services/users.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "*": "0"
+      }
+    },
+    {
+      "id": "E1-P1",
+      "path": "services/search.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "E1": ">=1"
+      }
+    },
+    {
+      "id": "E3-P1",
+      "path": "services/stats.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "E3": ">=1"
+      }
+    },
+    {
+      "id": "CLEAN-1",
+      "path": "services/clean.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "*": "0"
+      }
+    }
+  ]
+}

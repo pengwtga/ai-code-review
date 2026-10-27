@@ -1,0 +1,80 @@
+# aicr — AI Code Review Engine（M1 骨架）
+
+PR 级 AI 审查服务的引擎层。判据白名单、输出契约、评测口径对齐《M0-四路审查判据》v0.1。
+
+## 当前状态（M1 第一迭代）
+
+| 层 | 状态 |
+|---|---|
+| diff 解析（unified diff / git 双入口） | ✅ 已实测 |
+| 上下文装配（变更行 → enclosing function 全文 AST） | ✅ 已实测 |
+| L1 确定性检测器：C1(lite) C3(lite) C4 C5 E1(lite) E3(lite) E4 E6（8/10） | ✅ 注入回归 15/15 通过 |
+| 聚合去重（同文件 ±3 行保留最高 severity，其余挂 also_flags） | ✅ |
+| 输出契约（criterion_id 白名单 / evidence 必填 / 置信度阈值） | ✅ |
+| L2 LLM 判定（C2/E2/E5 + N/M 路，OpenAI 兼容协议 + 宽松 JSON 降级） | ⚠️ 接口就绪未实测（待配 key） |
+| N 路聚合（PR 级聚类比对，N1 招牌判据） | 未实现（M1.5） |
+| GitHub App / webhook / 幂等 | 未实现（M2） |
+
+## 用法
+
+```bash
+# git 模式（M1 主路径）：审查 base..head 之间的 Python 变更
+aicr review --repo /path/to/repo --base HEAD~1
+
+# 现成 diff 模式（webhook 同构路径）
+aicr review --diff pr.diff --repo /path/to/worktree
+
+# 注入回归集
+aicr eval --cases evals/cases.json --fixtures fixtures/cases
+```
+
+零第三方依赖（纯标准库），`pip install -e .` 后获得 `aicr` 命令。
+
+## 架构
+
+```
+git show / diff 文件
+        │
+        ▼
+diff_parser ──► FileDiff(hunks, added lines)        ← 行号锚定
+        │
+        ▼
+context ────► FileContext(全文 AST, changed_lines)  ← 变更行 → enclosing function
+        │
+        ▼
+detectors ──► L1 确定性（AST 判据 ×8，零成本）       ← 只报告新增行上的问题
+        │      L2 LLM（白名单 prompt，未实测）
+        ▼
+engine ─────► 去重(±3行) → 置信度阈值 → ReviewResult
+        │
+        ▼
+report ─────► 终端 / JSON（与 PR 评论回写共用结构）
+```
+
+设计要点（对应 M0 判据文档）：
+
+1. **判据即白名单**：引擎只输出注册过的 criterion_id，`Finding` 构造器强制校验。
+2. **只报新增行**：存量问题不报（Pre-existing 不在 M1 范围）。
+3. **反例进评测集**：`fixtures/cases/` 中每个判据都有正例与"长得像但不该报"的反例，
+   `aicr eval` 是判据修订的回归闸门（改判据 → 跑回归 → 三表对比）。
+4. **evidence 必填**：构造器层面禁止无引用的 finding（与简历罗盘"无引用不渲染"同一哲学）。
+
+## 注入回归集
+
+```
+C5-P1/C5-N1  可变默认参数（正例 / None 默认反例）
+E6-P1/E6-N1  协程未 await（正例 / await 反例）
+C4-P1/C4-N1  acquire-return-release（正例 / try-finally 反例）
+C3-P1/C3-N1  连接未释放（正例 / with 反例）
+E4-P1/E4-N1  异常静默吞掉（正例 / 收窄+日志反例）
+C1-P1/C1-N1  Optional 解引用（正例 / 判空反例）
+E1-P1        空容器首元素访问
+E3-P1        sum() 作除数无防护
+CLEAN-1      合规变更本底（全部判据 0 发现）
+```
+
+## 路线
+
+- **M1.5**：N1 聚合检测（PR 级聚类比对）+ N2/N4 + M 路 + L2 实测
+- **M2**：GitHub App（webhook 验签 / 异步 / 幂等 / 行级评论回写）+ 成本账面
+- **M3**：100+ 真实 PR（Django + FastAPI）评测集，三张表
