@@ -153,6 +153,102 @@
       "expect": {
         "*": "0"
       }
+    },
+    {
+      "id": "N1-P1",
+      "expect": {
+        "N1": ">=1"
+      },
+      "files": {
+        "services/orders.py": {
+          "before": "a_orders.py",
+          "after": "a_orders.after.py"
+        },
+        "services/payments.py": {
+          "before": "b_payments.py",
+          "after": "b_payments.after.py"
+        },
+        "services/refunds.py": {
+          "before": "c_refunds.py",
+          "after": "c_refunds.after.py"
+        }
+      }
+    },
+    {
+      "id": "N1-N1",
+      "expect": {
+        "*": "0"
+      },
+      "files": {
+        "services/orders.py": {
+          "before": "a_orders.py",
+          "after": "a_orders.after.py"
+        },
+        "services/payments.py": {
+          "before": "b_payments.py",
+          "after": "b_payments.after.py"
+        },
+        "services/refunds.py": {
+          "before": "c_refunds.py",
+          "after": "c_refunds.after.py"
+        }
+      }
+    },
+    {
+      "id": "N1-N2",
+      "expect": {
+        "*": "0"
+      },
+      "files": {
+        "services/orders.py": {
+          "before": "a_orders.py",
+          "after": "a_orders.after.py"
+        },
+        "services/payments.py": {
+          "before": "b_payments.py",
+          "after": "b_payments.after.py"
+        },
+        "services/util.py": {
+          "before": "c_util.py",
+          "after": "c_util.after.py"
+        }
+      }
+    },
+    {
+      "id": "N4-P1",
+      "expect": {
+        "N4": ">=1"
+      },
+      "path": "services/orders.py",
+      "before": "before.py",
+      "after": "after.py"
+    },
+    {
+      "id": "N4-N1",
+      "expect": {
+        "*": "0"
+      },
+      "path": "services/orders.py",
+      "before": "before.py",
+      "after": "after.py"
+    },
+    {
+      "id": "M1-P1",
+      "expect": {
+        "M1": ">=1"
+      },
+      "path": "services/shipping.py",
+      "before": "before.py",
+      "after": "after.py"
+    },
+    {
+      "id": "M4-P1",
+      "expect": {
+        "M4": ">=1"
+      },
+      "path": "services/flags.py",
+      "before": "before.py",
+      "after": "after.py"
     }
   ]
 }

@@ -73,12 +73,14 @@ class ReviewEngine:
         raw: list[tuple[Finding, str]] = []   # (finding, scope) scope=enclosing function
         files_reviewed = 0
         llm_units: list[tuple] = []           # (fc, path, func_source, func_lineno, changed)
+        contexts: dict[str, FileContext] = {}
         for fd in fds:
             path = fd.new_path or fd.old_path
             if not path.endswith(".py"):
                 continue
             src = sources.get(path, "")
             fc = FileContext(path=path, new_source=src, changed_lines=changed_line_numbers(fd))
+            contexts[path] = fc
             if fc.tree.body:
                 files_reviewed += 1
                 for det in self.detectors:
@@ -101,6 +103,10 @@ class ReviewEngine:
         if llm_units:
             raw_llm, agent_stats = self._run_llm(llm_units, sources)
             raw.extend(raw_llm)
+
+        # PR 级聚合检测（N1/N4/M1）：需要全部文件的上下文，在逐文件检测之后
+        from .pr_detectors import run_pr_detectors
+        raw.extend(run_pr_detectors(fds, contexts, sources))
 
         findings = self._dedup(raw)
         findings = [f for f in findings if f.confidence >= self.confidence_threshold]

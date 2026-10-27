@@ -490,5 +490,24 @@ def detect_e6(fc: FileContext) -> list[Finding]:
     return findings
 
 
+def detect_m4(fc: FileContext) -> list[Finding]:
+    """M4 不可达与恒假分支（仅新增）：新增行上的 if False / while False 等恒假测试。"""
+    findings: list[Finding] = []
+    for node in ast.walk(fc.tree):
+        if not isinstance(node, (ast.If, ast.While)):
+            continue
+        test = node.test
+        if isinstance(test, ast.Constant) and not test.value:
+            if fc.is_changed(node.lineno):      # M0 口径：仅报告新增的不可达分支
+                findings.append(Finding(
+                    criterion_id="M4", file=fc.path, line=node.lineno,
+                    severity="major", confidence=0.8,
+                    message=f"恒假条件（{ast.unparse(test)}）导致该分支永不执行——"
+                            "若是调试残留请删除；若意图是禁用逻辑请显式注释并配置化。",
+                    evidence=[_ev(fc.path, node.lineno, getattr(node, 'end_lineno', node.lineno))],
+                ))
+    return findings
+
+
 DETERMINISTIC_DETECTORS = [detect_c1, detect_c3, detect_c4, detect_c5,
-                           detect_e1, detect_e3, detect_e4, detect_e6]
+                           detect_e1, detect_e3, detect_e4, detect_e6, detect_m4]

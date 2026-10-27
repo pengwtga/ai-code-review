@@ -100,8 +100,14 @@ def _cmd_eval(args) -> int:
     rows: list[str] = []
     for case in cases["cases"]:
         fdir = args.fixtures / case["id"]
-        old = {case["path"]: (fdir / case["before"]).read_text(encoding="utf-8")}
-        new = {case["path"]: (fdir / case["after"]).read_text(encoding="utf-8")}
+        if "files" in case:                      # 多文件夹具（N1 等 PR 级判据）
+            old = {p: (fdir / spec["before"]).read_text(encoding="utf-8")
+                   for p, spec in case["files"].items()}
+            new = {p: (fdir / spec["after"]).read_text(encoding="utf-8")
+                   for p, spec in case["files"].items()}
+        else:
+            old = {case["path"]: (fdir / case["before"]).read_text(encoding="utf-8")}
+            new = {case["path"]: (fdir / case["after"]).read_text(encoding="utf-8")}
         result = engine.review(old, new)
         got: dict[str, int] = {}
         for f in result.findings:
