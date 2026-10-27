@@ -41,25 +41,51 @@ WEBHOOK_SECRET=... GITHUB_TOKEN=... aicr serve --port 8765 --allow pengwtga/ssrm
 
 ## 架构
 
+两条入口（CLI / webhook）汇入同一个引擎——同一份代码既是产品也是评测工具：
+
+```mermaid
+flowchart TB
+    subgraph IN["触发入口（同构）"]
+        CLI["CLI<br/>git show / 现成 diff"]
+        WH["GitHub webhook<br/>HMAC-SHA256 验签"]
+    end
+
+    subgraph SVC["webhook 服务层（M2）"]
+        IDEM["双层幂等<br/>delivery ID + (repo, pr, head_sha)"]
+        Q["sqlite 持久化任务队列<br/>worker 原子认领 · 重启不丢"]
+    end
+
+    subgraph ENG["审查引擎"]
+        DP["diff_parser<br/>FileDiff（hunks / 新增行）← 行号锚定"]
+        CTX["context<br/>变更行 → enclosing function（全文 AST）"]
+        L1["L1 确定性检测 ×12<br/>AST 判据 · 零成本 · 只报新增行"]
+        L2["L2 受控 agent（C2/E2/E5）<br/>只读工具白名单 · 预算 ≤8 调用 / ≤4 轮<br/>证据门禁 verify_finding"]
+        AGG["engine 聚合<br/>去重（同函数 ±3 行）· 置信度阈值"]
+    end
+
+    subgraph OUT["输出"]
+        REP["CLI 终端 / JSON<br/>（含 agent trace 与 stats）"]
+        CMP["compose 评论装配<br/>行锚定校验 · 锚不上降级进 summary"]
+        GH["GitHub 行级评论<br/>非阻断 COMMENT"]
+    end
+
+    CLI --> DP
+    WH --> IDEM --> Q --> DP
+    DP --> CTX
+    CTX --> L1 --> AGG
+    CTX --> L2 --> AGG
+    AGG --> REP
+    AGG --> CMP --> GH
 ```
-git show / diff 文件          GitHub webhook（HMAC 验签）
-        │                            │
-        ▼                            ▼
-diff_parser ──► FileDiff(hunks, added lines)        ← 行号锚定
-        │                            │
-        ▼                            ▼
-context ────► FileContext(全文 AST, changed_lines)  ← 变更行 → enclosing function
-        │                     webhook.py：delivery 幂等 + head_sha 幂等
-        │                     + sqlite 任务队列（重启不丢）
-        ▼                            │
-detectors ──► L1 确定性（AST 判据 ×12，零成本）      │
-        │      L2 LLM（白名单 + 预算 + 证据门禁）    ▼
-        │                     worker：拉 PR diff/head 文件 → 引擎
-        ▼                            │
-engine ─────► 去重(±3行) → 置信度阈值 → ReviewResult │
-        │                            ▼
-report ─────► 终端 / JSON       compose：行级评论锚定校验
-                                      （锚不上降级进 summary，非阻断 COMMENT）
+
+L2 内部的四层防御（对应「受控 agent」的差异化叙事）：
+
+```mermaid
+flowchart LR
+    A["判据白名单<br/>只认 C2/E2/E5"] --> B["预算上限<br/>≤8 工具调用 / ≤4 轮"]
+    B --> C["降级链<br/>函数调用 → 单轮 JSON → 无 key → 确定性层"]
+    C --> D["证据门禁 verify_finding<br/>声称必须过确定性语法核验"]
+    D --> E["放行 / 拦截计数<br/>rejected_by_gate"]
 ```
 
 设计要点（对应 M0 判据文档）：
