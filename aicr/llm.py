@@ -108,7 +108,12 @@ def agent_review_unit(path: str, function_source: str, func_start_line: int,
 
 
 def _gate_e5(function_source: str) -> bool:
-    """E5 前提：函数内存在 except Exception（裸捕获）。"""
+    """E5 前提：函数内存在过宽捕获（裸 except / except Exception / BaseException）。
+
+    裸 except 比 except Exception 更宽，属于同一判据的更强形态——
+    早期版本只认 ast.Name == "Exception"，把裸 except 当成「无 except」拒掉，
+    造成真实漏检（demo PR #1 上暴露）。
+    """
     try:
         tree = ast.parse(function_source)
     except SyntaxError:
@@ -116,8 +121,11 @@ def _gate_e5(function_source: str) -> bool:
     for node in ast.walk(tree):
         if isinstance(node, ast.ExceptHandler):
             t = node.type
+            if t is None:                       # 裸 except：
+                return True
             names = [t] if isinstance(t, ast.Name) else (t.elts if isinstance(t, ast.Tuple) else [])
-            if any(isinstance(n, ast.Name) and n.id == "Exception" for n in names):
+            if any(isinstance(n, ast.Name) and n.id in ("Exception", "BaseException")
+                   for n in names):
                 return True
     return False
 

@@ -5,7 +5,7 @@ import unittest
 from aicr.diff_parser import parse_unified_diff, make_unified_diff, changed_line_numbers
 from aicr.engine import ReviewEngine
 from aicr.context import FileContext
-from aicr.detectors import detect_c5, detect_e4
+from aicr.detectors import detect_c5, detect_e3, detect_e4
 from aicr.criteria_schema import Finding
 
 
@@ -48,6 +48,30 @@ class TestDetectors(unittest.TestCase):
         src = "def add(tag, tags=None):\n    tags = tags if tags is not None else []\n"
         fc = FileContext("a.py", src, {1, 2})
         self.assertEqual(detect_c5(fc), [])
+
+    def test_e3_flags_attribute_denominator(self):
+        # demo PR #1 暴露：真实代码分母多为属性（obj.total），早期只认裸变量名
+        src = ("def render(s):\n"
+               "    return f\"density {s.findings / s.files_reviewed:.2f}\"\n")
+        fc = FileContext("a.py", src, {2})
+        out = detect_e3(fc)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].criterion_id, "E3")
+        self.assertEqual(out[0].line, 2)
+
+    def test_e3_attribute_denominator_with_zero_guard_is_clean(self):
+        src = ("def render(s):\n"
+               "    if not s.files_reviewed:\n"
+               "        return \"0\"\n"
+               "    return f\"density {s.findings / s.files_reviewed:.2f}\"\n")
+        fc = FileContext("a.py", src, {2, 3, 4})
+        self.assertEqual(detect_e3(fc), [])
+
+    def test_e3_skips_call_denominator(self):
+        # a.count() 这类动态结果不判，避免误报
+        src = "def f(a):\n    return 1 / len(a)\n"
+        fc = FileContext("a.py", src, {2})
+        self.assertEqual(detect_e3(fc), [])
 
     def test_e4_flags_silent_except(self):
         src = "try:\n    x()\nexcept Exception:\n    pass\n"
@@ -247,6 +271,19 @@ class TestEvidenceGate(unittest.TestCase):
                "    except ValueError:\n"    # 具体异常，不算捕获过宽
                "        pass\n")
         self.assertFalse(verify_finding("E5", src, 1, 4))
+
+    def test_e5_bare_except_is_overbroad(self):
+        # demo PR #1 暴露：裸 except 比 except Exception 更宽，早期门禁当成「无 except」拒掉
+        src = ("def h(x):\n"
+               "    try:\n"
+               "        return x()\n"
+               "    except:\n"               # 裸捕获
+               "        return None\n")
+        self.assertTrue(verify_finding("E5", src, 1, 4))
+
+    def test_e5_still_rejects_when_no_except_at_all(self):
+        # 放宽裸 except 后，幻觉拦截不能退化
+        self.assertFalse(verify_finding("E5", self.SRC_NO_EXCEPT, 1, 2))
 
     def test_e2_gate(self):
         with_sub = "def h(a):\n    return a[1:]\n"
