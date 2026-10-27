@@ -265,7 +265,10 @@ class Worker(threading.Thread):
         summary, comments, _skipped = compose(result, diff_text,
                                               repo_label=f"{owner}/{repo}#{number}")
         if comments:
-            self.client.create_review(owner, repo, number, summary, comments)
+            try:
+                self.client.create_review(owner, repo, number, summary, comments)
+            except:
+                self.client.create_issue_comment(owner, repo, number, summary)
         else:
             self.client.create_issue_comment(owner, repo, number, summary)
         return result.stats.findings
