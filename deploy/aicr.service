@@ -1,20 +1,31 @@
 [Unit]
-Description=aicr AI code review webhook server
-After=network.target
+Description=aicr — AI Code Review webhook service
+Documentation=https://github.com/pengwtga/ai-code-review
+After=network-online.target
+Wants=network-online.target
 
+# 这是 124.222.174.133 上实际运行的版本（Ubuntu 24.04，登录用户 ubuntu，root 已禁用）。
+# 若部署到别的机器：改 User / WorkingDirectory / ExecStart 里的路径与 --allow 白名单即可。
 [Service]
 Type=simple
-User=aicr
-WorkingDirectory=/opt/aicr
-ExecStart=/usr/bin/env python3 -m aicr.cli serve --host 127.0.0.1 --port 8765
-EnvironmentFile=/opt/aicr/.env
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/aicr
+EnvironmentFile=/home/ubuntu/aicr/.env
+ExecStart=/usr/bin/python3 -m aicr.cli serve --host 127.0.0.1 --port 8765 --db /home/ubuntu/aicr/state/aicr.db --allow pengwtga/ssrm-aiops,pengwtga/ai-code-review
 Restart=always
 RestartSec=3
+StandardOutput=append:/home/ubuntu/aicr/logs/aicr.log
+StandardError=append:/home/ubuntu/aicr/logs/aicr.log
 
-# 加固：只读代码目录、禁新建子进程外的权限
+# 硬化：审查服务只需读代码目录 + 写 sqlite / 日志
 NoNewPrivileges=true
+PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/opt/aicr
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/aicr/state /home/ubuntu/aicr/logs
+ProtectKernelTunables=true
+ProtectKernelModules=true
 
 [Install]
 WantedBy=multi-user.target

@@ -15,7 +15,7 @@ PR 级 AI 审查服务的引擎层 + webhook 服务层。判据白名单、输�
 | L2 受控 agent（只读工具白名单 + 预算上限 + 证据门禁） | ✅ glm-4-flash 真模型实测（幻觉 6/6 拦截） |
 | **M2 webhook 服务**：HMAC 验签 / delivery+head_sha 双层幂等 / sqlite 持久化队列 / worker / 行级评论回写 | ✅ 单测 43/43 含端到端本地仿真（假 GitHub API） |
 | 评论装配（行锚定校验，锚不上降级进 summary，非阻断 COMMENT） | ✅ |
-| 部署材料（systemd unit + 指南，目标 124.222.174.133） | ✅ `deploy/`，待真实 webhook 联调 |
+| 部署 | ✅ **已上线 124.222.174.133**：systemd（`127.0.0.1:8765`）+ Caddy 反代 `http://124.222.174.133/webhook`；待安全组放行 80 与 PAT |
 
 ## 用法
 
