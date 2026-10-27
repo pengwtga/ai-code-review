@@ -1,0 +1,35 @@
+{
+  "1": {
+    "findings": 2,
+    "tool_calls": 0,
+    "iter_used": 12,
+    "gated": 10,
+    "by_criterion": {
+      "E5": 2
+    },
+    "units_concluded_1st": 12,
+    "elapsed_s": 45.7
+  },
+  "2": {
+    "findings": 2,
+    "tool_calls": 0,
+    "iter_used": 12,
+    "gated": 10,
+    "by_criterion": {
+      "E5": 2
+    },
+    "units_concluded_1st": 12,
+    "elapsed_s": 43.6
+  },
+  "4": {
+    "findings": 2,
+    "tool_calls": 0,
+    "iter_used": 12,
+    "gated": 10,
+    "by_criterion": {
+      "E5": 2
+    },
+    "units_concluded_1st": 12,
+    "elapsed_s": 48.0
+  }
+}
