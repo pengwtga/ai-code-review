@@ -8,7 +8,7 @@ PR 级 AI 审查服务的引擎层。判据白名单、输出契约、评测口�
 |---|---|
 | diff 解析（unified diff / git 双入口） | ✅ 已实测 |
 | 上下文装配（变更行 → enclosing function 全文 AST） | ✅ 已实测 |
-| L1 确定性检测器：C1(lite) C3(lite) C4 C5 E1(lite) E3(lite) E4 E6（8/10） | ✅ 注入回归 15/15 通过 |
+| L1 确定性检测器：C1(lite) C3(lite) C4 C5 E1(lite) E3(lite) E4 E6（8/10） | ✅ 注入回归 17/17 + 真实仓库 5 commit 出口检查 |
 | 聚合去重（同文件 ±3 行保留最高 severity，其余挂 also_flags） | ✅ |
 | 输出契约（criterion_id 白名单 / evidence 必填 / 置信度阈值） | ✅ |
 | L2 LLM 判定（C2/E2/E5 + N/M 路，OpenAI 兼容协议 + 宽松 JSON 降级） | ⚠️ 接口就绪未实测（待配 key） |
@@ -70,8 +70,21 @@ E4-P1/E4-N1  异常静默吞掉（正例 / 收窄+日志反例）
 C1-P1/C1-N1  Optional 解引用（正例 / 判空反例）
 E1-P1        空容器首元素访问
 E3-P1        sum() 作除数无防护
+E3-P2        行内三元守卫（反例：有守卫不报）
+E6-N2        asyncio.run 消费协程（反例：合法用法不报）
 CLEAN-1      合规变更本底（全部判据 0 发现）
 ```
+
+## 真实仓库出口检查（M1）
+
+对 ssrm-aiops 仓库 5 个真实 commit（含 1006 行的初始大 commit）实测：
+
+- 4 个常规 commit：0 发现，人工核验 diff 确认无判据形态问题（真阴性）
+- 初始大 commit：报 1 条 E3（`correct / total` 无零防护），人工核验为真阳性
+- 过程中揪出并修复 2 个检测器 bug（真实样本的价值）：
+  1. E6 误报 `asyncio.run(main())` —— 任务包装器白名单补 `run` / `run_until_complete`
+  2. E3 不认行内三元守卫 `round(x/total, 4) if total else 0` —— IfExp 父链守卫检查
+- 已知 lite 局限：除数为表达式（如 `sum(latencies) / len(latencies)`）不覆盖，归 L2
 
 ## 路线
 

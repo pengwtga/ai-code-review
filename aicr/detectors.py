@@ -17,7 +17,8 @@ from .context import FileContext, annotation_allows_none
 from .criteria_schema import Finding
 
 _MUTABLE_CALLOUTS = {"list", "dict", "set"}
-_TASK_WRAPPERS = {"create_task", "ensure_future", "gather", "wait"}
+_TASK_WRAPPERS = {"create_task", "ensure_future", "gather", "wait",
+                  "run", "run_until_complete"}  # asyncio.run / loop.run_until_complete 会消费协程
 _GUARD_ZERO_HINTS = {"max", "min"}
 _MUTATING_ATTRS = {"append", "extend", "add", "update", "insert", "pop", "remove"}
 
@@ -365,7 +366,10 @@ def detect_e3(fc: FileContext) -> list[Finding]:
         if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         body = func.body
-        params = {a.arg for a in func.args.args}
+        parents: dict[int, ast.AST] = {}
+        for p in ast.walk(func):
+            for c in ast.iter_child_nodes(p):
+                parents[id(c)] = p
         for node in ast.walk(func):
             if not (isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Div, ast.Mod))):
                 continue
@@ -377,6 +381,8 @@ def detect_e3(fc: FileContext) -> list[Finding]:
             name = den.id
             if _has_zero_guard(body, name, node.lineno):
                 continue
+            if _inside_ifexp_guard(node, parents, name):
+                continue  # 行内三元守卫 x/total if total else 0
             findings.append(Finding(
                 criterion_id="E3", file=fc.path, line=node.lineno,
                 severity="major", confidence=0.6,
@@ -385,6 +391,16 @@ def detect_e3(fc: FileContext) -> list[Finding]:
                 evidence=[_ev(fc.path, node.lineno, getattr(func, 'end_lineno', node.lineno))],
             ))
     return findings
+
+
+def _inside_ifexp_guard(node: ast.AST, parents: dict[int, ast.AST], name: str) -> bool:
+    """除法节点是否处于以 name 为条件的 IfExp 保护分支内（如 round(x/total, 4) if total else 0）。"""
+    cur = node
+    while id(cur) in parents:
+        cur = parents[id(cur)]
+        if isinstance(cur, ast.IfExp) and name in ast.unparse(cur.test):
+            return True
+    return False
 
 
 def _has_zero_guard(stmts: list[ast.stmt], name: str, before_line: int) -> bool:

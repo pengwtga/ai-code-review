@@ -135,6 +135,24 @@
       "expect": {
         "*": "0"
       }
+    },
+    {
+      "id": "E6-N2",
+      "path": "services/bootstrap.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "*": "0"
+      }
+    },
+    {
+      "id": "E3-P2",
+      "path": "services/accuracy.py",
+      "before": "before.py",
+      "after": "after.py",
+      "expect": {
+        "*": "0"
+      }
     }
   ]
 }
