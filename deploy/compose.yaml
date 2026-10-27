@@ -1,0 +1,25 @@
+# aicr webhook 服务编排：env_file 管密钥，volume 管状态
+#
+# 用法：
+#   cp .env.example .env && 补齐 WEBHOOK_SECRET / GITHUB_TOKEN
+#   docker compose -f deploy/compose.yaml up -d
+services:
+  aicr:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: aicr:latest
+    container_name: aicr
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    env_file:
+      - ../.env            # WEBHOOK_SECRET / GITHUB_TOKEN / GITHUB_API_BASE / AICR_*
+    volumes:
+      - aicr-state:/app/state
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  aicr-state:

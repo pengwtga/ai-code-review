@@ -1,7 +1,32 @@
 # M2 部署指南（目标：124.222.174.133）
 
 架构：`GitHub webhook → aicr serve（验签/幂等/入队）→ worker → GitHub 行级评论`。
-全标准库实现，服务器上**无需 pip 安装任何东西**，要求 Python ≥ 3.9。
+全标准库实现，提供两条等价部署路径：
+
+| 路径 | 适用 | 命令量 |
+|---|---|---|
+| **Docker（推荐）** | 换机迁移、演示、隔离边界干净 | 2 条 |
+| **systemd 裸跑** | 不想装 Docker / 极简环境 | ~10 条 |
+
+## 路径 A：Docker Compose（已构建验证）
+
+```bash
+# 服务器（或本地）上
+git clone <repo> && cd ai-code-review
+cp .env.example .env        # 补齐 WEBHOOK_SECRET / GITHUB_TOKEN
+docker compose -f deploy/compose.yaml up -d --build
+curl -s http://127.0.0.1:8765/healthz    # {"ok": true}
+```
+
+- sqlite 状态库在 named volume `aicr-state` 里，升级镜像不丢幂等记录与任务队列
+- 日志轮转 10MB×3；`docker logs -f aicr` 观察
+- 已验证：镜像构建、健康检查、签名 webhook → 202 入队 → worker 出站调用
+  （失败路径正确记 failed 不崩进程）
+
+## 路径 B：systemd 裸跑
+
+零依赖的代价是环境自管——这条路要求服务器 Python ≥ 3.9，适合不想引入
+Docker daemon 的极简环境。
 
 ## 1. 准备 GitHub 侧（一次性）
 
@@ -15,7 +40,7 @@
    - Events：**Pull requests only**
    - Active ✅
 
-## 2. 服务器侧
+## 2. 服务器侧（systemd 路径）
 
 ```bash
 # 创建运行用户与目录
