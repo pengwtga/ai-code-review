@@ -28,6 +28,8 @@ def main(argv: list[str] | None = None) -> int:
     p_rev.add_argument("--diff", type=Path, default=None, help="现成 unified diff 文件")
     p_rev.add_argument("--json-out", type=Path, default=None, help="结果 JSON 输出路径")
     p_rev.add_argument("--threshold", type=float, default=0.55, help="置信度阈值（低于不渲染）")
+    p_rev.add_argument("--llm", action="store_true",
+                       help="启用 L2 agent 层（只读工具 + 预算受控；需 AICR_API_BASE/AICR_API_KEY）")
 
     p_eval = sub.add_parser("eval", help="运行注入回归集")
     p_eval.add_argument("--cases", type=Path, default=Path("evals/cases.json"))
@@ -45,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
 # --------------------------------------------------------------------------- review
 
 def _cmd_review(args) -> int:
-    engine = ReviewEngine(confidence_threshold=args.threshold)
+    engine = ReviewEngine(confidence_threshold=args.threshold, enable_llm=args.llm)
     if args.diff:
         diff_text = args.diff.read_text(encoding="utf-8", errors="replace")
         result = engine.review_diff(diff_text, repo=args.repo)

@@ -16,6 +16,14 @@ def render_terminal(result: ReviewResult) -> str:
     lines.append(f"文件 {s.files_reviewed} ｜ 发现 {s.findings} ｜ 预估成本 ¥{s.est_cost_cny:.2f}")
     if s.by_criterion:
         lines.append("按判据：" + "  ".join(f"{k}×{v}" for k, v in sorted(s.by_criterion.items())))
+    if s.agent:
+        a = s.agent
+        if a.get("degraded"):
+            lines.append(f"agent：降级（未配置 LLM）｜ 单元 0")
+        else:
+            lines.append(f"agent：单元 {a.get('units', 0)} ｜ 工具调用 {a.get('tool_calls', 0)}"
+                         f" ｜ 迭代 {a.get('iterations', 0)}"
+                         + (f" ｜ 失败 {a['errors']}" if a.get("errors") else ""))
     lines.append("-" * 72)
     if not result.findings:
         lines.append("（无发现——所有判据未命中或低于置信度阈值）")

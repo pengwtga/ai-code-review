@@ -11,8 +11,9 @@ PR 级 AI 审查服务的引擎层。判据白名单、输出契约、评测口�
 | L1 确定性检测器：C1(lite) C3(lite) C4 C5 E1(lite) E3(lite) E4 E6（8/10） | ✅ 注入回归 17/17 + 真实仓库 5 commit 出口检查 |
 | 聚合去重（同文件 ±3 行保留最高 severity，其余挂 also_flags） | ✅ |
 | 输出契约（criterion_id 白名单 / evidence 必填 / 置信度阈值） | ✅ |
-| L2 LLM 判定（C2/E2/E5 + N/M 路，OpenAI 兼容协议 + 宽松 JSON 降级） | ⚠️ 接口就绪未实测（待配 key） |
-| N 路聚合（PR 级聚类比对，N1 招牌判据） | 未实现（M1.5） |
+| L2 LLM 判定（C2/E2/E5，OpenAI 兼容协议 + 宽松 JSON 降级） | ⚠️ 接口就绪未实测（待配 key） |
+| L2 受控 agent（只读工具白名单 + 预算上限 + 全程 trace） | ✅ 循环机制单测覆盖（假 transport 实测），待配 key 实测 |
+| N 路聚合（PR 级聚类比对，N1 招牌判据） | 未实现（M1.5 后期） |
 | GitHub App / webhook / 幂等 | 未实现（M2） |
 
 ## 用法
@@ -26,6 +27,9 @@ aicr review --diff pr.diff --repo /path/to/worktree
 
 # 注入回归集
 aicr eval --cases evals/cases.json --fixtures fixtures/cases
+
+# L2 受控 agent（需环境变量 AICR_API_BASE / AICR_API_KEY，可选 AICR_MODEL，默认 deepseek-chat）
+AICR_API_BASE=... AICR_API_KEY=... aicr review --repo ... --base HEAD~1 --llm
 ```
 
 零第三方依赖（纯标准库），`pip install -e .` 后获得 `aicr` 命令。
@@ -58,6 +62,17 @@ report ─────► 终端 / JSON（与 PR 评论回写共用结构）
 3. **反例进评测集**：`fixtures/cases/` 中每个判据都有正例与"长得像但不该报"的反例，
    `aicr eval` 是判据修订的回归闸门（改判据 → 跑回归 → 三表对比）。
 4. **evidence 必填**：构造器层面禁止无引用的 finding（与简历罗盘"无引用不渲染"同一哲学）。
+
+## L2 受控 agent（M1.5）
+
+与 Anthropic 验证式（自由 agent，算力换精度）的架构区别：**预算受限的受控 agent**。
+
+- **只读工具白名单**（`tools.py`）：`find_symbol` / `get_function_body` / `list_callers` / `search_repo`，全部只读；
+- **作用域受限**：工具只能读本次变更涉及的文件集合，仓库其余文件不可达；
+- **预算硬上限**：每变更单元工具调用 ≤8 次、迭代 ≤4 轮，超限强制无工具收敛；
+- **全程可回放**：每次工具调用与结果记入 trace，汇总进 stats（JSON 输出含 agent 字段）；
+- **降级链**：模型无函数调用能力 → 单轮 JSON prompt（M1 路径）→ 无 key → 仅确定性层；
+- **越权过滤**：L2 输出只认 C2/E2/E5，白名单外与无 evidence 的输出直接丢弃。
 
 ## 注入回归集
 

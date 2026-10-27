@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import ast
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -32,6 +33,7 @@ class ReviewResult:
                 "findings": self.stats.findings,
                 "by_criterion": self.stats.by_criterion,
                 "est_cost_cny": self.stats.est_cost_cny,
+                "agent": self.stats.agent,
             },
             "findings": [f.to_dict() for f in self.findings],
         }
@@ -70,6 +72,7 @@ class ReviewEngine:
                 llm_ready: bool) -> ReviewResult:
         raw: list[tuple[Finding, str]] = []   # (finding, scope) scope=enclosing function
         files_reviewed = 0
+        llm_units: list[tuple] = []           # (fc, path, func_source, func_lineno, changed)
         for fd in fds:
             path = fd.new_path or fd.old_path
             if not path.endswith(".py"):
@@ -81,6 +84,23 @@ class ReviewEngine:
                 for det in self.detectors:
                     for f in det(fc):
                         raw.append((f, _scope(fc, f.line)))
+                if llm_ready and self.enable_llm:
+                    # L2 单元 = 变更行所在的 enclosing function（模块级变更不进 L2）
+                    by_scope: dict[str, list[int]] = {}
+                    for ln in sorted(fc.changed_lines):
+                        func = fc.function_at(ln)
+                        key = func.name if func is not None else "<module>"
+                        by_scope.setdefault(key, []).append(ln)
+                    for key, lines in by_scope.items():
+                        if key == "<module>":
+                            continue
+                        func = fc.function_by_name(key)
+                        llm_units.append((fc, path, fc.function_source(func), func.lineno, lines))
+
+        agent_stats: dict = {}
+        if llm_units:
+            raw_llm, agent_stats = self._run_llm(llm_units, sources)
+            raw.extend(raw_llm)
 
         findings = self._dedup(raw)
         findings = [f for f in findings if f.confidence >= self.confidence_threshold]
@@ -89,9 +109,34 @@ class ReviewEngine:
         by_c: dict[str, int] = {}
         for f in findings:
             by_c[f.criterion_id] = by_c.get(f.criterion_id, 0) + 1
+        mode = "hybrid" if agent_stats.get("units") else "deterministic"
         stats = ReviewStats(files_reviewed=files_reviewed, findings=len(findings),
-                            by_criterion=by_c, mode="deterministic")
+                            by_criterion=by_c, mode=mode, agent=agent_stats)
         return ReviewResult(findings=findings, stats=stats)
+
+    def _run_llm(self, units: list[tuple], sources: dict[str, str]) -> tuple[list[tuple], dict]:
+        """受控 agent 循环：每单元独立工具预算（8 次），全程 trace 汇总进 stats。"""
+        from . import llm as llm_mod
+        from .tools import ReviewToolbox
+        out: list[tuple[Finding, str]] = []
+        agg: dict = {"units": 0, "tool_calls": 0, "iterations": 0, "errors": 0, "max_calls_per_unit": 8}
+        for fc, path, func_src, func_lineno, lines in units:
+            toolbox = ReviewToolbox(sources=sources, max_calls=agg["max_calls_per_unit"])
+            try:
+                fs, trace = llm_mod.agent_review_unit(path, func_src, func_lineno, lines, toolbox)
+            except RuntimeError as e:
+                print(f"[aicr] L2 降级为确定性层：{e}", file=sys.stderr)
+                return out, {**agg, "degraded": True}
+            except Exception as e:                      # 单元失败不炸整体审查
+                agg["errors"] += 1
+                print(f"[aicr] L2 单元失败（{path}）: {type(e).__name__}: {e}", file=sys.stderr)
+                continue
+            agg["units"] += 1
+            agg["tool_calls"] += trace["tool_calls"]
+            agg["iterations"] += trace["iterations"]
+            for f in fs:
+                out.append((f, _scope(fc, f.line)))
+        return out, agg
 
     def _dedup(self, raw: list[tuple[Finding, str]]) -> list[Finding]:
         """同文件 + 同函数 + 行距 ≤3 才算重复（跨函数的两个问题不是重复）。"""

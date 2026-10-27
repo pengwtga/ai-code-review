@@ -66,3 +66,4 @@ class ReviewStats:
     mode: str = "deterministic"        # deterministic | hybrid
     criteria_version: str = "v0.1"
     est_cost_cny: float = 0.0          # 确定性层成本为 0；LLM 层由 cost.py 记账
+    agent: dict = field(default_factory=dict)   # L2 agent 统计：units/tool_calls/iterations/errors

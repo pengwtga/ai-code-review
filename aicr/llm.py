@@ -1,21 +1,128 @@
-"""L2 LLM 判定层（接口就绪，未实测）。
+"""L2 agent 判定层（M1.5：工具循环版）。
 
-职责：把确定性层覆盖不了的判据（C2 / E2 / E5，以及全部 N / M 路）交给 LLM，
-判据白名单直接注入 prompt（M0 第 2 节铁律 1：判据即白名单，模型只许报清单内问题）。
-OpenAI 兼容协议（DeepSeek / 智谱 / SiliconFlow 均适用），provider 可整体替换。
+架构立场（对应竞品文档的差异化叙事）：
+Anthropic 验证式 = 自由 agent（每条结论回代码核对，20 分钟 / $15-25）；
+本引擎 = **预算受限的受控 agent**——模型可在只读工具白名单内自主取证，
+但工具调用次数、作用域（仅变更文件）、迭代轮数全部有硬上限，全程 trace 可回放。
 
-状态：代码就绪、未接 key 实测——engine.enable_llm=False 时不走此路径。
+降级链：函数调用不可用 → 退回单轮 JSON prompt（M1 路径）；无 key → 确定性层 only。
+OpenAI 兼容协议（DeepSeek / 智谱 / SiliconFlow 均适用）。
 """
 
 from __future__ import annotations
 
 import json
 import os
+
 from .criteria_schema import CRITERIA, Finding
+from .tools import ReviewToolbox
 
-_L2_CRITERIA = ["C2", "E2", "E5"]  # M1 范围内需要 LLM 的判据；N/M 路在 M1.5/M2 接入
+_L2_CRITERIA = ["C2", "E2", "E5"]      # M1.5 范围内需要 LLM 的判据；N/M 路 M1.5 后期/M2 接入
 
-_SYSTEM = "你是代码审查引擎的判定器。只允许报告白名单判据内的问题，输出 JSON。"
+_MAX_ITERATIONS = 4
+
+_AGENT_SYSTEM = """你是代码审查引擎的取证判定器。规则：
+1. 只允许报告白名单判据内的问题；白名单外的问题即使存在也忽略（判据即白名单）。
+2. 你可以在只读工具白名单内自主取证（查符号、看函数体、找调用点、搜索），
+   但工具预算有限（每单元最多 {max_calls} 次），先判断是否真需要取证再调用。
+3. 每条结论必须给出证据：行号引用，或工具调用发现的 file:line。
+4. 不确定就不报——漏报可归因，误报直接摧毁工具可信度。
+5. 证据足够后立即输出结论，不要为凑轮次调用工具。
+最终输出 JSON 数组（不要包裹其他文字），每项：
+{{"criterion_id","line","severity":"blocker|major","confidence":0-1,"message","evidence_refs":["file:line" 或 "tool:工具名:发现简述"]}}
+无命中输出 []。"""
+
+# ---- 工具循环 ----------------------------------------------------------------
+
+
+def agent_review_unit(path: str, function_source: str, func_start_line: int,
+                      changed: list[int], toolbox: ReviewToolbox,
+                      transport=None) -> tuple[list[Finding], dict]:
+    """对一个变更单元（函数）跑受控 agent 循环，返回 (findings, trace)。"""
+    transport = transport or _http_transport
+    criteria_text = "\n".join(f"- {cid}: {desc}"
+                              for cid, desc in CRITERIA.items() if cid in _L2_CRITERIA)
+    sys_prompt = _AGENT_SYSTEM.format(max_calls=toolbox.max_calls)
+    user_prompt = (f"变更文件：{path}；变更行（绝对行号）：{changed}\n"
+                   f"当前函数起始行：{func_start_line}（行号请用文件绝对行号）。\n\n"
+                   f"可用判据白名单：\n{criteria_text}\n\n"
+                   f"函数全文：\n```python\n{function_source}\n```")
+
+    messages: list[dict] = [{"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": user_prompt}]
+    trace: dict = {"iterations": 0, "tool_calls": 0, "tools_used": {}, "degraded": False}
+
+    for _ in range(_MAX_ITERATIONS):
+        trace["iterations"] += 1
+        resp = transport(messages, toolbox.spec)
+        msg = resp.get("choices", [{}])[0].get("message", {})
+        tool_calls = msg.get("tool_calls")
+        if not tool_calls:
+            return _collect(msg.get("content", ""), path, trace)
+        messages.append(msg)
+        for tc in tool_calls:
+            fn = tc.get("function", {})
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            result = toolbox.call(fn.get("name", ""), args)
+            trace["tool_calls"] += 1
+            tname = fn.get("name", "?")
+            trace["tools_used"][tname] = trace["tools_used"].get(tname, 0) + 1
+            messages.append({"role": "tool", "tool_call_id": tc.get("id", ""),
+                             "content": result})
+
+    # 迭代上限：强制无工具收敛
+    messages.append({"role": "user",
+                     "content": "工具预算与轮次已用尽。请立即基于已有证据输出最终 JSON 结论（可为 []）。"})
+    resp = transport(messages, None)
+    msg = resp.get("choices", [{}])[0].get("message", {})
+    return _collect(msg.get("content") or "", path, trace)
+
+
+def _collect(content: str, path: str, trace: dict) -> tuple[list[Finding], dict]:
+    findings: list[Finding] = []
+    for item in _parse_lenient(content):
+        cid = item.get("criterion_id")
+        if cid not in _L2_CRITERIA:            # 白名单外直接丢弃（比全 CRITERIA 更严：L2 只管自己的路）
+            continue
+        evidence = [str(r) for r in item.get("evidence_refs", [])]
+        if not evidence:
+            continue                            # 无引用不渲染（铁律 3）
+        try:
+            findings.append(Finding(
+                criterion_id=cid, file=item.get("file", path),
+                line=int(item.get("line", 0)),
+                severity=item.get("severity", "major"),
+                confidence=float(item.get("confidence", 0)),
+                message=item.get("message", ""), evidence=evidence))
+        except (TypeError, ValueError):
+            continue
+    return findings, trace
+
+
+# ---- 传输层（OpenAI 兼容） ----------------------------------------------------
+
+
+def _http_transport(messages: list[dict], tools: list[dict] | None) -> dict:
+    api_base = os.environ.get("AICR_API_BASE")
+    api_key = os.environ.get("AICR_API_KEY")
+    model = os.environ.get("AICR_MODEL", "deepseek-chat")
+    if not api_base or not api_key:
+        raise RuntimeError("AICR_API_BASE / AICR_API_KEY 未配置，L2 层降级为仅确定性检测")
+    body: dict = {"model": model, "messages": messages, "temperature": 0}
+    if tools:
+        body["tools"] = tools
+    import urllib.request
+    req = urllib.request.Request(
+        f"{api_base.rstrip('/')}/chat/completions", data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"})
+    with urllib.request.urlopen(req, timeout=90) as resp:
+        return json.loads(resp.read())
+
+
+# ---- 降级路径：单轮 JSON（无函数调用能力的模型 / M1 行为保持） ------------------
 
 _PROMPT = """审查以下 Python 变更。变更行（新文件行号）：{changed}
 
@@ -38,7 +145,7 @@ def build_prompt(function_source: str, changed: list[int]) -> str:
 
 
 def call_llm(prompt: str) -> list[Finding]:
-    """OpenAI 兼容 chat.completions 调用。未配置时抛 RuntimeError，由调用方降级。"""
+    """单轮调用（降级路径）。未配置时抛 RuntimeError，由调用方降级。"""
     api_base = os.environ.get("AICR_API_BASE")
     api_key = os.environ.get("AICR_API_KEY")
     model = os.environ.get("AICR_MODEL", "deepseek-chat")
@@ -49,7 +156,7 @@ def call_llm(prompt: str) -> list[Finding]:
 
     body = json.dumps({
         "model": model,
-        "messages": [{"role": "system", "content": _SYSTEM},
+        "messages": [{"role": "system", "content": "你是代码审查引擎的判定器。只允许报告白名单判据内的问题，输出 JSON。"},
                      {"role": "user", "content": prompt}],
         "response_format": {"type": "json_object"},
         "temperature": 0,
@@ -78,6 +185,8 @@ def call_llm(prompt: str) -> list[Finding]:
 
 def _parse_lenient(content: str) -> list:
     """glm-4-flash 等不支持 JSON mode 时的宽松提取（沿用 ssrm-aiops 的降级经验）。"""
+    if not content or not isinstance(content, str):
+        return []
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
