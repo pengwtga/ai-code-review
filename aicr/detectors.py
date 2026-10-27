@@ -360,6 +360,21 @@ def _first_empty_access(stmts: list[ast.stmt], var: str) -> ast.AST | None:
 
 # ---------------------------------------------------------------- E3 除零/模零
 
+def _den_key(den: ast.expr) -> str | None:
+    """分母标识：Name 用变量名，Attribute 用 a.b 表达式文本（真实代码两种都常见）。
+
+    限制：只接受 ≤3 段的属性链，且不接受调用（a.count() 这类动态结果不判，
+    避免把 len()/count() 的返回值误当可判分母）。
+    """
+    if isinstance(den, ast.Name):
+        return den.id
+    if isinstance(den, ast.Attribute):
+        src = ast.unparse(den)
+        if src.count(".") <= 2 and "(" not in src:
+            return src
+    return None
+
+
 def detect_e3(fc: FileContext) -> list[Finding]:
     findings: list[Finding] = []
     for func in ast.walk(fc.tree):
@@ -375,18 +390,17 @@ def detect_e3(fc: FileContext) -> list[Finding]:
                 continue
             if not fc.is_changed(node.lineno):
                 continue
-            den = node.right
-            if not isinstance(den, ast.Name):
+            key = _den_key(node.right)
+            if key is None:
                 continue
-            name = den.id
-            if _has_zero_guard(body, name, node.lineno):
+            if _has_zero_guard(body, key, node.lineno):
                 continue
-            if _inside_ifexp_guard(node, parents, name):
+            if _inside_ifexp_guard(node, parents, key):
                 continue  # 行内三元守卫 x/total if total else 0
             findings.append(Finding(
                 criterion_id="E3", file=fc.path, line=node.lineno,
                 severity="major", confidence=0.6,
-                message=(f"除数 {name} 来自计算或参数，可见范围内无零值防护，空集合聚合（如 sum()）"
+                message=(f"除数 {key} 来自计算或参数，可见范围内无零值防护，空集合聚合（如 sum()）"
                          "或入参为 0 时会抛 ZeroDivisionError。建议先判零或用 max(den, 1) 语义确认。"),
                 evidence=[_ev(fc.path, node.lineno, getattr(func, 'end_lineno', node.lineno))],
             ))
@@ -407,7 +421,7 @@ def _has_zero_guard(stmts: list[ast.stmt], name: str, before_line: int) -> bool:
     for s in stmts:
         for n in ast.walk(s):
             if isinstance(n, ast.Call) and _call_name(n) in _GUARD_ZERO_HINTS \
-                    and any(isinstance(a, ast.Name) and a.id == name for a in n.args):
+                    and any(_den_key(a) == name for a in n.args):
                 return True
             if isinstance(s, ast.If):
                 src = ast.unparse(s.test)
