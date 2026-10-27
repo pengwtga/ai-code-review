@@ -23,7 +23,8 @@ def render_terminal(result: ReviewResult) -> str:
         else:
             lines.append(f"agent：单元 {a.get('units', 0)} ｜ 工具调用 {a.get('tool_calls', 0)}"
                          f" ｜ 迭代 {a.get('iterations', 0)}"
-                         + (f" ｜ 失败 {a['errors']}" if a.get("errors") else ""))
+                         + (f" ｜ 失败 {a['errors']}" if a.get("errors") else "")
+                         + (f" ｜ 门禁拦截 {a['rejected_by_gate']}" if a.get("rejected_by_gate") else ""))
     lines.append("-" * 72)
     if not result.findings:
         lines.append("（无发现——所有判据未命中或低于置信度阈值）")

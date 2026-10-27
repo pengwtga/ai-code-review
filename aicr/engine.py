@@ -134,6 +134,8 @@ class ReviewEngine:
             agg["units"] += 1
             agg["tool_calls"] += trace["tool_calls"]
             agg["iterations"] += trace["iterations"]
+            if trace.get("rejected_by_gate"):
+                agg["rejected_by_gate"] = agg.get("rejected_by_gate", 0) + trace["rejected_by_gate"]
             for f in fs:
                 out.append((f, _scope(fc, f.line)))
         return out, agg

@@ -11,8 +11,7 @@ PR 级 AI 审查服务的引擎层。判据白名单、输出契约、评测口�
 | L1 确定性检测器：C1(lite) C3(lite) C4 C5 E1(lite) E3(lite) E4 E6（8/10） | ✅ 注入回归 17/17 + 真实仓库 5 commit 出口检查 |
 | 聚合去重（同文件 ±3 行保留最高 severity，其余挂 also_flags） | ✅ |
 | 输出契约（criterion_id 白名单 / evidence 必填 / 置信度阈值） | ✅ |
-| L2 LLM 判定（C2/E2/E5，OpenAI 兼容协议 + 宽松 JSON 降级） | ⚠️ 接口就绪未实测（待配 key） |
-| L2 受控 agent（只读工具白名单 + 预算上限 + 全程 trace） | ✅ 循环机制单测覆盖（假 transport 实测），待配 key 实测 |
+| L2 受控 agent（只读工具白名单 + 预算上限 + 全程 trace） | ✅ glm-4-flash 真模型实测 + 证据门禁 |
 | N 路聚合（PR 级聚类比对，N1 招牌判据） | 未实现（M1.5 后期） |
 | GitHub App / webhook / 幂等 | 未实现（M2） |
 
@@ -28,8 +27,9 @@ aicr review --diff pr.diff --repo /path/to/worktree
 # 注入回归集
 aicr eval --cases evals/cases.json --fixtures fixtures/cases
 
-# L2 受控 agent（需环境变量 AICR_API_BASE / AICR_API_KEY，可选 AICR_MODEL，默认 deepseek-chat）
-AICR_API_BASE=... AICR_API_KEY=... aicr review --repo ... --base HEAD~1 --llm
+# L2 受控 agent（需 AICR_API_BASE / AICR_API_KEY / AICR_MODEL；
+# 自动加载项目根 .env，见 .env.example；默认 glm-4-flash）
+aicr review --repo ... --base HEAD~1 --llm
 ```
 
 零第三方依赖（纯标准库），`pip install -e .` 后获得 `aicr` 命令。
@@ -72,7 +72,24 @@ report ─────► 终端 / JSON（与 PR 评论回写共用结构）
 - **预算硬上限**：每变更单元工具调用 ≤8 次、迭代 ≤4 轮，超限强制无工具收敛；
 - **全程可回放**：每次工具调用与结果记入 trace，汇总进 stats（JSON 输出含 agent 字段）；
 - **降级链**：模型无函数调用能力 → 单轮 JSON prompt（M1 路径）→ 无 key → 仅确定性层；
-- **越权过滤**：L2 输出只认 C2/E2/E5，白名单外与无 evidence 的输出直接丢弃。
+- **越权过滤**：L2 输出只认 C2/E2/E5，白名单外与无 evidence 的输出直接丢弃；
+- **证据门禁**（`verify_finding`）：LLM 的每条声称必须通过确定性语法核验——
+  E5 要求函数内真实存在 `except Exception`，E2 要求存在下标/range 计算，
+  行号越出函数范围直接拦截。拦截数计入 stats（`rejected_by_gate`）。
+
+## 真模型实测记录（glm-4-flash）
+
+配置 `.env`（智谱 OpenAI 兼容端点）后对真实 commit 实测，得到本项目的核心教训：
+
+- **幻觉拦截案例**：b83dbcc（42 行变更）——模型对全文件 **0 个 except** 的 `main.py`
+  凭空报告 6 条 E5（置信度 0.8–1.0），且工具调用 0 次（没取证就下结论）。
+  证据门禁全部拦截（`rejected_by_gate: 6`），合法放行 0 条。
+- **门禁通过案例**：初始大 commit（1006 行）——34 个 L2 单元、模型声称 38 条，
+  门禁拦截 32 条幻觉，放行 2 条 E5（人工核验均指向真实存在的 `except Exception`，
+  是否属于"任务边界"留给人工判定），E3（`correct/total` 无零防护）由 L1 报出。
+- 结论：**小模型的 L2 输出必须当作"假设"而非"结论"**——确定性门禁 + 白名单 +
+  预算上限三层防御缺一不可。这也是注入夹具测不出的问题类型：夹具测检测器假设，
+  真模型样本测模型的可靠性假设。
 
 ## 注入回归集
 

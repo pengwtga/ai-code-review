@@ -98,6 +98,7 @@ import json
 
 from aicr.tools import ReviewToolbox
 from aicr import llm as llm_mod
+from aicr.llm import verify_finding
 
 SOURCES = {
     "svc/a.py": "def helper(x):\n    return x * 2\n\n\ndef handler(q):\n    v = helper(q)\n    return v[0]\n",
@@ -186,16 +187,18 @@ class TestAgentLoop(unittest.TestCase):
     def test_whitelist_filtered(self):
         self.transport = _FakeTransport([
             _final(json.dumps([
-                {"criterion_id": "C2", "line": 1, "severity": "major", "confidence": 0.8,
-                 "message": "x", "evidence_refs": ["a:1"]},
-                {"criterion_id": "N1", "line": 1, "severity": "major", "confidence": 0.8,
-                 "message": "L2 无权报 N 路", "evidence_refs": ["a:1"]},
-                {"criterion_id": "C2", "line": 2, "severity": "major", "confidence": 0.8,
+                {"criterion_id": "C2", "line": 6, "severity": "major", "confidence": 0.8,
+                 "message": "x", "evidence_refs": ["a:6"]},          # 函数内合法行
+                {"criterion_id": "N1", "line": 6, "severity": "major", "confidence": 0.8,
+                 "message": "L2 无权报 N 路", "evidence_refs": ["a:6"]},
+                {"criterion_id": "C2", "line": 7, "severity": "major", "confidence": 0.8,
                  "message": "无证据", "evidence_refs": []},
+                {"criterion_id": "C2", "line": 1, "severity": "major", "confidence": 0.8,
+                 "message": "行号在函数范围外", "evidence_refs": ["a:1"]},
             ])),
         ])
         findings, _ = self._unit(ReviewToolbox(SOURCES))
-        self.assertEqual([f.criterion_id for f in findings], ["C2"])   # N1 越权丢弃 + 无证据丢弃
+        self.assertEqual([f.criterion_id for f in findings], ["C2"])   # N1 越权 + 无证据 + 行越界 全丢弃
 
     def test_budget_forces_final_answer(self):
         # 模型死循环要工具：4 轮迭代上限后强制收敛
@@ -213,6 +216,56 @@ class TestAgentLoop(unittest.TestCase):
         findings, trace = self._unit(ReviewToolbox(SOURCES))
         self.assertEqual(trace["tool_calls"], 1)  # 工具报错被捕获为 error JSON
         self.assertEqual(findings, [])
+
+
+class TestEvidenceGate(unittest.TestCase):
+    """证据门禁：LLM 声称的判据必须通过确定性语法核验（真实样本教训）。"""
+
+    SRC_WITH_EXCEPT = ("def h(x):\n"          # line 1
+                       "    try:\n"            # 2
+                       "        return x\n"    # 3
+                       "    except Exception:\n"  # 4
+                       "        return None\n")   # 5
+
+    SRC_NO_EXCEPT = ("def h(x):\n"            # 1
+                     "    if x:\n"            # 2
+                     "        return x[0]\n"  # 3
+                     "    return None\n")     # 4
+
+    def test_e5_passes_when_except_exists(self):
+        self.assertTrue(verify_finding("E5", self.SRC_WITH_EXCEPT, 1, 4))
+
+    def test_e5_rejected_when_no_except(self):
+        # 真实事故复现：glm-4-flash 在无 except 的函数上报告 E5×6
+        self.assertFalse(verify_finding("E5", self.SRC_NO_EXCEPT, 1, 2))
+        self.assertFalse(verify_finding("E5", self.SRC_NO_EXCEPT, 1, 3))
+
+    def test_e5_specific_exception_is_not_overbroad(self):
+        src = ("def h(x):\n"
+               "    try:\n"
+               "        pass\n"
+               "    except ValueError:\n"    # 具体异常，不算捕获过宽
+               "        pass\n")
+        self.assertFalse(verify_finding("E5", src, 1, 4))
+
+    def test_e2_gate(self):
+        with_sub = "def h(a):\n    return a[1:]\n"
+        without = "def h(a):\n    return a\n"
+        self.assertTrue(verify_finding("E2", with_sub, 1, 2))
+        self.assertFalse(verify_finding("E2", without, 1, 2))
+
+    def test_line_outside_function_rejected(self):
+        self.assertFalse(verify_finding("E5", self.SRC_WITH_EXCEPT, 10, 4))
+
+    def test_collect_records_gate_rejections(self):
+        # 走 _collect 全链路：幻觉 E5 被拦截并计入 trace
+        src = "def h(x):\n    return x\n"
+        payload = json.dumps([{"criterion_id": "E5", "line": 2, "severity": "major",
+                               "confidence": 1.0, "message": "幻觉",
+                               "evidence_refs": ["svc/a.py:2"]}], ensure_ascii=False)
+        findings, trace = llm_mod._collect(payload, "svc/a.py", {}, src, 1)
+        self.assertEqual(findings, [])
+        self.assertEqual(trace.get("rejected_by_gate"), 1)
 
 
 if __name__ == "__main__":

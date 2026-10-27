@@ -11,11 +11,30 @@ OpenAI 兼容协议（DeepSeek / 智谱 / SiliconFlow 均适用）。
 
 from __future__ import annotations
 
+import ast
 import json
 import os
+from pathlib import Path
 
 from .criteria_schema import CRITERIA, Finding
 from .tools import ReviewToolbox
+
+
+def load_dotenv() -> None:
+    """加载 CWD 或项目根的 .env（不覆盖已设置的环境变量）。本地 key 不入库。"""
+    for candidate in (Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"):
+        if not candidate.is_file():
+            continue
+        for line in candidate.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            os.environ.setdefault(k.strip(), v.strip())
+        break
+
+
+load_dotenv()
 
 _L2_CRITERIA = ["C2", "E2", "E5"]      # M1.5 范围内需要 LLM 的判据；N/M 路 M1.5 后期/M2 接入
 
@@ -58,7 +77,8 @@ def agent_review_unit(path: str, function_source: str, func_start_line: int,
         msg = resp.get("choices", [{}])[0].get("message", {})
         tool_calls = msg.get("tool_calls")
         if not tool_calls:
-            return _collect(msg.get("content", ""), path, trace)
+            return _collect(msg.get("content") or "", path, trace,
+                            function_source, func_start_line)
         messages.append(msg)
         for tc in tool_calls:
             fn = tc.get("function", {})
@@ -78,11 +98,77 @@ def agent_review_unit(path: str, function_source: str, func_start_line: int,
                      "content": "工具预算与轮次已用尽。请立即基于已有证据输出最终 JSON 结论（可为 []）。"})
     resp = transport(messages, None)
     msg = resp.get("choices", [{}])[0].get("message", {})
-    return _collect(msg.get("content") or "", path, trace)
+    return _collect(msg.get("content") or "", path, trace,
+                    function_source, func_start_line)
 
 
-def _collect(content: str, path: str, trace: dict) -> tuple[list[Finding], dict]:
+# ---- 证据门禁：LLM 声称的判据必须通过确定性语法核验 ----------------------------
+# 背景（真实样本教训）：glm-4-flash 在无 except 的函数上凭空报告 E5×6（置信度 1.0）。
+# 铁律：LLM 的声称是「假设」，判据的语法前提必须能在代码里被确定性证实。
+
+
+def _gate_e5(function_source: str) -> bool:
+    """E5 前提：函数内存在 except Exception（裸捕获）。"""
+    try:
+        tree = ast.parse(function_source)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler):
+            t = node.type
+            names = [t] if isinstance(t, ast.Name) else (t.elts if isinstance(t, ast.Tuple) else [])
+            if any(isinstance(n, ast.Name) and n.id == "Exception" for n in names):
+                return True
+    return False
+
+
+def _gate_e2(function_source: str) -> bool:
+    """E2 前提：函数内存在下标切片或 range() 计算。"""
+    try:
+        tree = ast.parse(function_source)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            return True
+        if isinstance(node, ast.Call):
+            f = node.func
+            if isinstance(f, ast.Name) and f.id == "range":
+                return True
+    return False
+
+
+def _gate_c2(function_source: str, line: int, func_start_line: int) -> bool:
+    """C2（复制粘贴变量错位）：正确样板可能在其他文件，无法函数内强验。
+    弱门禁：报告行必须是真实代码（非空、非注释）。"""
+    try:
+        text = function_source.splitlines()[line - func_start_line].strip()
+    except IndexError:
+        return False
+    return bool(text) and not text.startswith("#")
+
+
+_GATES = {"E5": _gate_e5, "E2": _gate_e2, "C2": _gate_c2}
+
+
+def verify_finding(cid: str, function_source: str, func_start_line: int,
+                   line: int) -> bool:
+    """证据门禁：行号必须在函数范围内，且判据的语法前提成立。"""
+    n_lines = function_source.count("\n") + 1
+    if not (func_start_line <= line < func_start_line + n_lines):
+        return False
+    gate = _GATES.get(cid)
+    if gate is None:
+        return True
+    if gate.__code__.co_argcount == 3:          # (source, line, start) 弱门禁
+        return gate(function_source, line, func_start_line)
+    return gate(function_source)
+
+
+def _collect(content: str, path: str, trace: dict,
+             function_source: str = "", func_start_line: int = 1) -> tuple[list[Finding], dict]:
     findings: list[Finding] = []
+    rejected = 0
     for item in _parse_lenient(content):
         cid = item.get("criterion_id")
         if cid not in _L2_CRITERIA:            # 白名单外直接丢弃（比全 CRITERIA 更严：L2 只管自己的路）
@@ -91,14 +177,20 @@ def _collect(content: str, path: str, trace: dict) -> tuple[list[Finding], dict]
         if not evidence:
             continue                            # 无引用不渲染（铁律 3）
         try:
-            findings.append(Finding(
+            f = Finding(
                 criterion_id=cid, file=item.get("file", path),
                 line=int(item.get("line", 0)),
                 severity=item.get("severity", "major"),
                 confidence=float(item.get("confidence", 0)),
-                message=item.get("message", ""), evidence=evidence))
+                message=item.get("message", ""), evidence=evidence)
         except (TypeError, ValueError):
             continue
+        if not verify_finding(cid, function_source, func_start_line, f.line):
+            rejected += 1                       # 幻觉拦截：语法前提不成立
+            continue
+        findings.append(f)
+    if rejected:
+        trace["rejected_by_gate"] = trace.get("rejected_by_gate", 0) + rejected
     return findings, trace
 
 
