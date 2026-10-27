@@ -1,8 +1,8 @@
-# aicr — AI Code Review Engine（M1 骨架）
+# aicr — AI Code Review Engine（M2）
 
-PR 级 AI 审查服务的引擎层。判据白名单、输出契约、评测口径对齐《M0-四路审查判据》v0.1。
+PR 级 AI 审查服务的引擎层 + webhook 服务层。判据白名单、输出契约、评测口径对齐《M0-四路审查判据》v0.1。
 
-## 当前状态（M1 第一迭代）
+## 当前状态
 
 | 层 | 状态 |
 |---|---|
@@ -12,9 +12,10 @@ PR 级 AI 审查服务的引擎层。判据白名单、输出契约、评测口�
 | PR 级聚合检测（N1 同构遗漏 / N4 改名未同步 / M1 静默放宽） | ✅ 跨文件 PR 视角，N1 为招牌判据 |
 | 聚合去重（同文件 ±3 行保留最高 severity，其余挂 also_flags） | ✅ |
 | 输出契约（criterion_id 白名单 / evidence 必填 / 置信度阈值） | ✅ |
-| L2 受控 agent（只读工具白名单 + 预算上限 + 全程 trace） | ✅ glm-4-flash 真模型实测 + 证据门禁 |
-| N 路聚合（PR 级聚类比对，N1 招牌判据） | 未实现（M1.5 后期） |
-| GitHub App / webhook / 幂等 | 未实现（M2） |
+| L2 受控 agent（只读工具白名单 + 预算上限 + 证据门禁） | ✅ glm-4-flash 真模型实测（幻觉 6/6 拦截） |
+| **M2 webhook 服务**：HMAC 验签 / delivery+head_sha 双层幂等 / sqlite 持久化队列 / worker / 行级评论回写 | ✅ 单测 43/43 含端到端本地仿真（假 GitHub API） |
+| 评论装配（行锚定校验，锚不上降级进 summary，非阻断 COMMENT） | ✅ |
+| 部署材料（systemd unit + 指南，目标 124.222.174.133） | ✅ `deploy/`，待真实 webhook 联调 |
 
 ## 用法
 
@@ -31,6 +32,9 @@ aicr eval --cases evals/cases.json --fixtures fixtures/cases
 # L2 受控 agent（需 AICR_API_BASE / AICR_API_KEY / AICR_MODEL；
 # 自动加载项目根 .env，见 .env.example；默认 glm-4-flash）
 aicr review --repo ... --base HEAD~1 --llm
+
+# M2 webhook 服务器（WEBHOOK_SECRET / GITHUB_TOKEN 走环境变量，部署详见 deploy/README.md）
+WEBHOOK_SECRET=... GITHUB_TOKEN=... aicr serve --port 8765 --allow pengwtga/ssrm-aiops
 ```
 
 零第三方依赖（纯标准库），`pip install -e .` 后获得 `aicr` 命令。
@@ -38,22 +42,24 @@ aicr review --repo ... --base HEAD~1 --llm
 ## 架构
 
 ```
-git show / diff 文件
-        │
-        ▼
+git show / diff 文件          GitHub webhook（HMAC 验签）
+        │                            │
+        ▼                            ▼
 diff_parser ──► FileDiff(hunks, added lines)        ← 行号锚定
-        │
-        ▼
+        │                            │
+        ▼                            ▼
 context ────► FileContext(全文 AST, changed_lines)  ← 变更行 → enclosing function
-        │
-        ▼
-detectors ──► L1 确定性（AST 判据 ×8，零成本）       ← 只报告新增行上的问题
-        │      L2 LLM（白名单 prompt，未实测）
-        ▼
-engine ─────► 去重(±3行) → 置信度阈值 → ReviewResult
-        │
-        ▼
-report ─────► 终端 / JSON（与 PR 评论回写共用结构）
+        │                     webhook.py：delivery 幂等 + head_sha 幂等
+        │                     + sqlite 任务队列（重启不丢）
+        ▼                            │
+detectors ──► L1 确定性（AST 判据 ×12，零成本）      │
+        │      L2 LLM（白名单 + 预算 + 证据门禁）    ▼
+        │                     worker：拉 PR diff/head 文件 → 引擎
+        ▼                            │
+engine ─────► 去重(±3行) → 置信度阈值 → ReviewResult │
+        │                            ▼
+report ─────► 终端 / JSON       compose：行级评论锚定校验
+                                      （锚不上降级进 summary，非阻断 COMMENT）
 ```
 
 设计要点（对应 M0 判据文档）：
@@ -145,7 +151,8 @@ CLEAN-1      合规变更本底（全部判据 0 发现）
 
 ## 路线
 
-- **M1.5 已完成**：L2 受控 agent（真模型实测 + 证据门禁）+ N1/N4/M1/M4 聚合检测
-- **M1.5 剩余**：N2（同模块重造）/ N3（锁顺序，M2 起）/ M2（复制漂移）/ M3（时序依赖）
-- **M2**：GitHub App（webhook 验签 / 异步 / 幂等 / 行级评论回写）+ 成本账面
+- **M1/M1.5 已完成**：确定性 12 判据 + L2 受控 agent（真模型实测 + 证据门禁）+ PR 级聚合检测
+- **M2 已完成（待真实联调）**：webhook 服务器（HMAC 验签 / delivery+head_sha 双层幂等 /
+  sqlite 持久化队列 / worker / 行级评论回写），单测 43/43 含端到端本地仿真；部署材料在 `deploy/`
 - **M3**：100+ 真实 PR（Django + FastAPI）评测集，三张表 + 迭代/预算参数扫描
+- **判据剩余**：N2（同模块重造）/ N3（锁顺序，需调用图装配）/ M2（复制漂移）/ M3（时序依赖）

@@ -54,18 +54,20 @@ class ReviewEngine:
         return self._review(fds, {**old_files, **new_files}, llm_ready=True)
 
     # ---- 入口 2：现成 diff（webhook 场景） ------------------------------------
-    def review_diff(self, diff_text: str, repo: Path | None = None) -> ReviewResult:
+    def review_diff(self, diff_text: str, repo: Path | None = None,
+                    sources: dict[str, str] | None = None) -> ReviewResult:
         fds = parse_unified_diff(diff_text)
-        sources: dict[str, str] = {}
-        for fd in fds:
-            path = fd.new_path or fd.old_path
-            if repo is not None:
-                p = repo / path
-                if p.exists():
-                    sources[path] = p.read_text(encoding="utf-8", errors="replace")
-            if path not in sources:
-                sources[path] = _reconstruct_new(fd)
-        return self._review(fds, sources, llm_ready=False)
+        if sources is None:
+            sources = {}
+            for fd in fds:
+                path = fd.new_path or fd.old_path
+                if repo is not None:
+                    p = repo / path
+                    if p.exists():
+                        sources[path] = p.read_text(encoding="utf-8", errors="replace")
+                if path not in sources:
+                    sources[path] = _reconstruct_new(fd)
+        return self._review(fds, sources, llm_ready=True)
 
     # ---- 内部 ------------------------------------------------------------------
     def _review(self, fds: list[FileDiff], sources: dict[str, str],

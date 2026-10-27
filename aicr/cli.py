@@ -35,12 +35,22 @@ def main(argv: list[str] | None = None) -> int:
     p_eval.add_argument("--cases", type=Path, default=Path("evals/cases.json"))
     p_eval.add_argument("--fixtures", type=Path, default=Path("fixtures/cases"))
 
+    p_serve = sub.add_parser("serve", help="M2：webhook 服务器（验签/幂等/异步审查/评论回写）")
+    p_serve.add_argument("--host", default="0.0.0.0")
+    p_serve.add_argument("--port", type=int, default=8000)
+    p_serve.add_argument("--db", type=Path, default=Path("aicr_state.db"),
+                         help="sqlite 状态库（幂等 + 任务队列）")
+    p_serve.add_argument("--allow", default="",
+                         help="仓库白名单，逗号分隔（如 owner/repo1,owner/repo2；空=不限制）")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "review":
         return _cmd_review(args)
     if args.cmd == "eval":
         return _cmd_eval(args)
+    if args.cmd == "serve":
+        return _cmd_serve(args)
     return 2
 
 
@@ -89,6 +99,29 @@ def _load_git_pair(repo: Path, base: str, head: str | None) -> tuple[dict, dict]
         except (RuntimeError, OSError):
             new[name] = ""                       # 删除文件
     return old, new
+
+
+# --------------------------------------------------------------------------- serve
+
+def _cmd_serve(args) -> int:
+    import os
+    from .webhook import serve
+
+    secret = os.environ.get("WEBHOOK_SECRET", "")
+    token = os.environ.get("GITHUB_TOKEN", "")
+    api_base = os.environ.get("GITHUB_API_BASE", "https://api.github.com")
+    if not secret or not token:
+        print("需要环境变量 WEBHOOK_SECRET 与 GITHUB_TOKEN", file=sys.stderr)
+        return 2
+    allow = {r.strip() for r in args.allow.split(",") if r.strip()}
+    print(f"aicr serve @ {args.host}:{args.port} ｜ API {api_base} ｜ 白名单 {allow or '不限'}",
+          flush=True)
+    httpd = serve(args.host, args.port, secret, token, str(args.db), allow, api_base)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
 
 
 # --------------------------------------------------------------------------- eval

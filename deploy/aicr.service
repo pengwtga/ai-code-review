@@ -1,0 +1,20 @@
+[Unit]
+Description=aicr AI code review webhook server
+After=network.target
+
+[Service]
+Type=simple
+User=aicr
+WorkingDirectory=/opt/aicr
+ExecStart=/usr/bin/env python3 -m aicr.cli serve --host 127.0.0.1 --port 8765
+EnvironmentFile=/opt/aicr/.env
+Restart=always
+RestartSec=3
+
+# 加固：只读代码目录、禁新建子进程外的权限
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/aicr
+
+[Install]
+WantedBy=multi-user.target
